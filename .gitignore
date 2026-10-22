@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+hdfs_sim/
+nosql_sim.json
+.streamlit/

@@ -2,10 +2,18 @@
 bigdata_algorithms.py
 =====================
 Core Big Data Analytics Algorithms for Undergraduates:
-1. MapReduce (Demand Counter & Reduce-side Join)
-2. Stream Mining (Bloom Filter, DGIM, Flajolet-Martin)
-3. Product Similarity & Clustering (Jaccard, Cosine, K-Means/CURE)
-4. Time-Series Demand Forecasting (Moving Average & Linear Trend)
+1. MapReduce Execution Engine:
+   - Input Split -> Map Phase -> Partition & Shuffle/Sort -> Reduce Phase
+   - Reduce-Side Join (Tagging and Merging)
+2. Mining Streaming Data:
+   - Bloom Filter (Sub-linear membership query, zero false negatives)
+   - DGIM Algorithm (Sliding-window counter with logarithmic space)
+   - Flajolet-Martin Algorithm (Distinct item estimation via trailing hash zeros)
+3. High-Dimensional Similarity & Clustering:
+   - Jaccard Similarity on Set Characteristics
+   - CURE & K-Means Market Segmentation (Price vs Demand)
+4. Distributed Demand Forecasting:
+   - Moving Average, Linear Trend Projection, and MAE Metric
 """
 
 import math
@@ -16,65 +24,95 @@ import pandas as pd
 from sklearn.cluster import KMeans
 
 # ==============================================================================
-# 1. MapReduce: Batch Analytics
+# 1. MapReduce Execution Engine
 # ==============================================================================
-def mapreduce_product_demand(df_transactions: pd.DataFrame):
+def mapreduce_product_demand_trace(df_transactions: pd.DataFrame, num_reducers: int = 3):
     """
-    Simulates a 2-stage MapReduce job:
-    - Map: reads each row and emits (product_id, (quantity, revenue))
-    - Shuffle & Sort: groups emissions by product_id
-    - Reduce: aggregates total quantity sold and revenue per product
+    Simulates the full Hadoop MapReduce execution pipeline:
+    1. Input Splits
+    2. Map Phase: emits key-value pairs (K2, V2)
+    3. Partitioner: hash(key) mod num_reducers
+    4. Shuffle & Sort: network exchange and key collation
+    5. Reduce Phase: aggregation per key
     """
-    # 1. MAP PHASE
-    intermediate = []
+    # Stage 1: Input Splits
+    sample_splits = [
+        {"split_id": f"Split-0{i+1}", "rows": len(df_transactions) // 3} for i in range(3)
+    ]
+
+    # Stage 2: Map Phase
+    map_emissions = []
     for _, row in df_transactions.iterrows():
         key = str(row["product_id"])
-        val = (int(row["quantity"]), float(row["total_revenue"]))
-        intermediate.append((key, val))
+        val = {
+            "tx_id": str(row["tx_id"]),
+            "quantity": int(row["quantity"]),
+            "revenue": float(row["total_revenue"])
+        }
+        partition = abs(hash(key)) % num_reducers
+        map_emissions.append({"key": key, "value": val, "partition": partition})
 
-    # 2. SHUFFLE & SORT
-    grouped = defaultdict(list)
-    for key, val in intermediate:
-        grouped[key].append(val)
+    # Stage 3 & 4: Shuffle & Sort across Reducers
+    shuffle_sort = defaultdict(list)
+    for emission in map_emissions:
+        shuffle_sort[emission["key"]].append((emission["value"]["quantity"], emission["value"]["revenue"]))
 
-    # 3. REDUCE PHASE
-    reduced = []
-    for product_id, values in grouped.items():
-        total_qty = sum(v[0] for v in values)
-        total_rev = sum(v[1] for v in values)
-        tx_count = len(values)
-        reduced.append({
+    # Stage 5: Reduce Phase
+    reduce_results = []
+    for product_id, val_list in shuffle_sort.items():
+        total_qty = sum(v[0] for v in val_list)
+        total_rev = sum(v[1] for v in val_list)
+        tx_count = len(val_list)
+        assigned_reducer = abs(hash(product_id)) % num_reducers
+        reduce_results.append({
             "product_id": product_id,
             "units_sold": total_qty,
             "total_revenue": round(total_rev, 2),
-            "order_count": tx_count
+            "order_count": tx_count,
+            "assigned_reducer": f"Reducer-{assigned_reducer}"
         })
 
-    return pd.DataFrame(reduced).sort_values(by="units_sold", ascending=False)
+    df_reduced = pd.DataFrame(reduce_results).sort_values(by="units_sold", ascending=False)
 
-def mapreduce_reduce_side_join(df_transactions: pd.DataFrame, df_products: pd.DataFrame):
+    return {
+        "splits": sample_splits,
+        "sample_map_emissions": map_emissions[:12],
+        "total_emissions_count": len(map_emissions),
+        "reduced_df": df_reduced
+    }
+
+def mapreduce_reduce_side_join_trace(df_transactions: pd.DataFrame, df_products: pd.DataFrame):
     """
-    Simulates a Reduce-Side Join in MapReduce:
-    - Mapper tags records with origin: ('PROD', product_meta) or ('TX', transaction_meta)
-    - Reducer receives all records for product_id and joins them.
+    Simulates Hadoop Reduce-Side Join:
+    - Mappers tag product records as 'P' and transaction records as 'T'
+    - Shuffle groups all records sharing product_id onto the same Reducer
+    - Reducer loops through 'T' records and joins the single 'P' metadata
     """
-    tagged = []
+    tagged_records = []
     for _, p in df_products.iterrows():
-        tagged.append((p["product_id"], ("P", {"name": p["name"], "category": p["category"], "price": p["price"]})))
-    for _, t in df_transactions.iterrows():
-        tagged.append((t["product_id"], ("T", {"tx_id": t["tx_id"], "quantity": t["quantity"], "revenue": t["total_revenue"]})))
+        tagged_records.append({
+            "key": p["product_id"],
+            "tag": "P (Catalog)",
+            "payload": {"name": p["name"], "category": p["category"], "price": p["price"]}
+        })
+    for _, t in df_transactions.head(20).iterrows():
+        tagged_records.append({
+            "key": t["product_id"],
+            "tag": "T (Transaction)",
+            "payload": {"tx_id": t["tx_id"], "quantity": t["quantity"], "revenue": t["total_revenue"]}
+        })
 
     grouped = defaultdict(list)
-    for key, val in tagged:
-        grouped[key].append(val)
+    for item in tagged_records:
+        grouped[item["key"]].append((item["tag"], item["payload"]))
 
     joined = []
     for prod_id, items in grouped.items():
-        prod_info = next((v[1] for v in items if v[0] == "P"), None)
+        prod_info = next((v[1] for v in items if "P" in v[0]), None)
         if not prod_info:
             continue
         for tag, data in items:
-            if tag == "T":
+            if "T" in tag:
                 joined.append({
                     "tx_id": data["tx_id"],
                     "product_id": prod_id,
@@ -83,165 +121,219 @@ def mapreduce_reduce_side_join(df_transactions: pd.DataFrame, df_products: pd.Da
                     "quantity": data["quantity"],
                     "revenue": data["revenue"]
                 })
-    return pd.DataFrame(joined)
+
+    return {
+        "tagged_sample": tagged_records[:10],
+        "joined_df": pd.DataFrame(joined)
+    }
 
 # ==============================================================================
-# 2. Stream Mining Algorithms
+# 2. Mining Streaming Data
 # ==============================================================================
 class BloomFilter:
     """
-    Probabilistic data structure for stream membership testing.
-    Zero False Negatives; small, tunable False Positive rate.
+    Probabilistic space-efficient data structure.
+    - m: size of bit array
+    - k: number of independent hash functions
+    - Zero False Negatives: if an item was added, bits are guaranteed to be 1.
+    - False Positive Probability p ≈ (1 - e^(-kn/m))^k
     """
-    def __init__(self, size: int = 256, num_hashes: int = 3):
+    def __init__(self, size: int = 128, num_hashes: int = 3):
         self.size = size
         self.num_hashes = num_hashes
         self.bit_array = [0] * size
+        self.inserted_count = 0
 
-    def _hashes(self, item: str):
+    def get_hashes(self, item: str):
         hashes = []
         for i in range(self.num_hashes):
-            h = int(hashlib.md5(f"{item}_{i}".encode()).hexdigest(), 16)
-            hashes.append(h % self.size)
+            digest = hashlib.md5(f"{item}_salt_{i}".encode()).hexdigest()
+            pos = int(digest, 16) % self.size
+            hashes.append((f"Hash-{i+1}", pos))
         return hashes
 
     def add(self, item: str):
-        for idx in self._hashes(item):
-            self.bit_array[idx] = 1
+        for _, pos in self.get_hashes(item):
+            self.bit_array[pos] = 1
+        self.inserted_count += 1
 
     def contains(self, item: str) -> bool:
-        return all(self.bit_array[idx] == 1 for idx in self._hashes(item))
+        return all(self.bit_array[pos] == 1 for _, pos in self.get_hashes(item))
+
+    def false_positive_probability(self) -> float:
+        if self.inserted_count == 0:
+            return 0.0
+        exponent = - (self.num_hashes * self.inserted_count) / self.size
+        p = (1.0 - math.exp(exponent)) ** self.num_hashes
+        return round(p, 4)
 
 class DGIM:
     """
-    Datar-Gionis-Indyk-Motwani (DGIM) algorithm.
-    Counts number of 1s (e.g. surge sales) in a sliding window N with logarithmic memory.
-    Maintains at most 2 buckets of any power-of-2 size.
+    Datar-Gionis-Indyk-Motwani (DGIM) Algorithm.
+    Counts number of 1s (surge purchases) in sliding window N.
+    Memory: O(log^2 N) bits instead of N bits.
+    Max error bounded by at most 50%.
     """
-    def __init__(self, window_size: int = 100):
+    def __init__(self, window_size: int = 60):
         self.window_size = window_size
         self.timestamp = 0
-        # Buckets: list of (size, end_timestamp)
-        self.buckets = []
+        self.buckets = []  # List of dicts: {"size": int, "end_time": int}
 
     def update(self, bit: int):
         self.timestamp += 1
-        # Expire old buckets beyond sliding window
-        self.buckets = [b for b in self.buckets if (self.timestamp - b[1]) <= self.window_size]
+        # 1. Expire buckets older than window N
+        self.buckets = [b for b in self.buckets if (self.timestamp - b["end_time"]) <= self.window_size]
 
+        # 2. If new bit is 1, create bucket of size 1
         if bit == 1:
-            # Create new bucket of size 1
-            self.buckets.insert(0, (1, self.timestamp))
+            self.buckets.insert(0, {"size": 1, "end_time": self.timestamp})
             self._compact()
 
     def _compact(self):
-        # Merge if more than 2 buckets of the same size exist
+        # Enforce invariant: at most 2 buckets of any given size 2^j
         i = 0
         while i < len(self.buckets) - 2:
-            s1, s2, s3 = self.buckets[i][0], self.buckets[i+1][0], self.buckets[i+2][0]
+            s1 = self.buckets[i]["size"]
+            s2 = self.buckets[i+1]["size"]
+            s3 = self.buckets[i+2]["size"]
             if s1 == s2 == s3:
-                # Merge oldest two into size 2*s2
-                merged = (s2 * 2, self.buckets[i+1][1])
+                # Merge oldest two into size 2 * s2
+                self.buckets[i+1]["size"] = s2 * 2
                 self.buckets.pop(i+2)
-                self.buckets[i+1] = merged
             else:
                 i += 1
 
     def count_ones(self) -> int:
-        """Estimates total 1s: sum all buckets except the oldest (which contributes half)."""
         if not self.buckets:
             return 0
         if len(self.buckets) == 1:
-            return self.buckets[0][0]
-        full_sum = sum(b[0] for b in self.buckets[:-1])
-        oldest_half = self.buckets[-1][0] // 2
-        return full_sum + oldest_half
+            return self.buckets[0]["size"]
+        # Sum all buckets except oldest, add half of oldest
+        total = sum(b["size"] for b in self.buckets[:-1])
+        total += self.buckets[-1]["size"] // 2
+        return total
 
-def flajolet_martin_distinct_count(stream_items: list) -> int:
+def flajolet_martin_trace(stream_items: list):
     """
-    Flajolet-Martin Algorithm for estimating distinct elements in a stream using bit hashes.
-    Estimate = 2^R / 0.77351 (phi correction factor).
+    Flajolet-Martin Algorithm for distinct element counting.
+    Hashes each element, finds trailing zeros R in binary representation.
+    Distinct elements estimate = 2^R / 0.77351.
     """
-    max_zeros = 0
+    max_r = 0
+    item_traces = []
     for item in stream_items:
         h = int(hashlib.sha256(str(item).encode()).hexdigest(), 16)
-        binary = bin(h)[2:]
-        trailing_zeros = len(binary) - len(binary.rstrip('0'))
-        if trailing_zeros > max_zeros:
-            max_zeros = trailing_zeros
-    estimate = int((2 ** max_zeros) / 0.77351)
-    return min(estimate, len(stream_items))
+        binary_str = bin(h)[2:]
+        trailing_zeros = len(binary_str) - len(binary_str.rstrip('0'))
+        if trailing_zeros > max_r:
+            max_r = trailing_zeros
+        if len(item_traces) < 10:
+            item_traces.append({
+                "item": str(item),
+                "binary_suffix": "..." + binary_str[-8:],
+                "trailing_zeros_R": trailing_zeros
+            })
+
+    estimate = int((2 ** max_r) / 0.77351)
+    return {
+        "max_trailing_zeros_R": max_r,
+        "raw_estimate": estimate,
+        "sample_traces": item_traces,
+        "exact_distinct_count": len(set(stream_items))
+    }
 
 # ==============================================================================
-# 3. Product Similarity & Clustering
+# 3. High-Dimensional Similarity & Clustering
 # ==============================================================================
-def calculate_jaccard_similarity(set_a: set, set_b: set) -> float:
-    union = set_a.union(set_b)
-    if not union:
-        return 0.0
-    return round(len(set_a.intersection(set_b)) / len(union), 3)
-
-def compute_product_similarities(df_products: pd.DataFrame):
-    """Computes pairwise Jaccard tag similarity for retail cross-selling recommendations."""
-    products = df_products.to_dict(orient="records")
-    matrix = []
-    for p1 in products:
-        tags1 = set(p1["tags"].split())
-        row = {"product": p1["name"]}
-        for p2 in products:
-            tags2 = set(p2["tags"].split())
-            row[p2["product_id"]] = calculate_jaccard_similarity(tags1, tags2)
-        matrix.append(row)
-    return pd.DataFrame(matrix)
-
-def cluster_products_by_market(df_products: pd.DataFrame, df_transactions: pd.DataFrame, n_clusters: int = 3):
+def compute_jaccard_matrix(df_products: pd.DataFrame):
     """
-    Groups products by Price vs Total Demand using K-Means (CURE/Centroid concept).
-    Segments into: e.g. Budget Essentials, Mid-Tier Favorites, Premium Luxury.
+    Jaccard Similarity J(A, B) = |A ∩ B| / |A ∪ B|.
+    Measures overlap of product characteristic tag sets.
+    """
+    records = df_products.to_dict(orient="records")
+    data = []
+    for p1 in records:
+        set1 = set(p1["tags"].split())
+        row = {"Product": p1["name"]}
+        for p2 in records:
+            set2 = set(p2["tags"].split())
+            intersection = len(set1.intersection(set2))
+            union = len(set1.union(set2))
+            jaccard = round(intersection / union, 2) if union > 0 else 0.0
+            row[p2["product_id"]] = jaccard
+        data.append(row)
+    return pd.DataFrame(data)
+
+def cluster_products_cure_concept(df_products: pd.DataFrame, df_transactions: pd.DataFrame, n_clusters: int = 3):
+    """
+    CURE (Clustering Using Representatives) vs K-Means concept:
+    - K-Means discovers spherical clusters around a single centroid.
+    - CURE identifies clusters using multiple representative points shrunk toward the centroid by factor alpha.
     """
     demand = df_transactions.groupby("product_id")["quantity"].sum().reset_index()
     merged = pd.merge(df_products, demand, on="product_id", how="left").fillna(0)
 
     X = merged[["price", "quantity"]].values
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-    merged["cluster"] = kmeans.fit_predict(X)
+    merged["cluster_id"] = kmeans.fit_predict(X)
 
-    # Assign descriptive segment names
-    cluster_labels = {
-        0: "Segment A (High Volume)",
-        1: "Segment B (Premium/Niche)",
-        2: "Segment C (Balanced Everyday)"
+    centroids = kmeans.cluster_centers_
+
+    # Calculate representative points shrunk by alpha = 0.2 toward centroid
+    alpha = 0.2
+    rep_points = []
+    for c_id, centroid in enumerate(centroids):
+        pts = X[merged["cluster_id"] == c_id]
+        if len(pts) > 0:
+            # Pick extreme point and shrink towards centroid
+            farthest_idx = np.argmax(np.linalg.norm(pts - centroid, axis=1))
+            shrunk_pt = pts[farthest_idx] + alpha * (centroid - pts[farthest_idx])
+            rep_points.append({
+                "cluster_id": c_id,
+                "centroid_price": round(centroid[0], 2),
+                "centroid_demand": round(centroid[1], 2),
+                "rep_point_price": round(shrunk_pt[0], 2),
+                "rep_point_demand": round(shrunk_pt[1], 2)
+            })
+
+    cluster_names = {
+        0: "High Volume / Entry Price",
+        1: "Premium Niche / Low Volume",
+        2: "Mid-Market Everyday"
     }
-    merged["segment"] = merged["cluster"].map(lambda c: cluster_labels.get(c, f"Cluster {c}"))
-    return merged
+    merged["segment_label"] = merged["cluster_id"].map(lambda c: cluster_names.get(c, f"Cluster {c}"))
+    return merged, pd.DataFrame(rep_points)
 
 # ==============================================================================
-# 4. Time-Series Demand Forecasting
+# 4. Distributed Demand Forecasting
 # ==============================================================================
 def forecast_product_demand(df_transactions: pd.DataFrame, product_id: str = "P101", forecast_days: int = 7):
     """
-    Calculates 7-day Moving Average and Linear Trend extrapolation for future retail demand.
+    Evaluates 7-Day Rolling Moving Average and Linear Extrapolation.
+    Computes MAE (Mean Absolute Error) on historical observations.
     """
     prod_tx = df_transactions[df_transactions["product_id"] == product_id].copy()
     if prod_tx.empty:
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), {}
 
     daily = prod_tx.groupby("date")["quantity"].sum().reset_index()
     daily["date"] = pd.to_datetime(daily["date"])
-    daily = daily.sort_values(by="date")
+    daily = daily.sort_values(by="date").reset_index(drop=True)
 
     # 7-day Moving Average
     daily["moving_avg_7d"] = daily["quantity"].rolling(window=7, min_periods=1).mean().round(2)
 
-    # Simple Linear Regression (Trend)
+    # Linear Regression (Ordinary Least Squares)
     x = np.arange(len(daily))
     y = daily["quantity"].values
     if len(x) > 1:
         slope, intercept = np.polyfit(x, y, 1)
+        fitted_y = slope * x + intercept
+        mae = float(np.mean(np.abs(y - fitted_y)))
     else:
-        slope, intercept = 0, y[0] if len(y) > 0 else 0
+        slope, intercept = 0.0, float(y[0]) if len(y) > 0 else 0.0
+        mae = 0.0
 
-    # Project next N days
     last_date = daily["date"].max()
     future_dates = [last_date + pd.Timedelta(days=i) for i in range(1, forecast_days + 1)]
     future_x = np.arange(len(daily), len(daily) + forecast_days)
@@ -252,4 +344,11 @@ def forecast_product_demand(df_transactions: pd.DataFrame, product_id: str = "P1
         "forecasted_demand": future_y
     })
 
-    return daily, df_forecast
+    metrics = {
+        "model": "OLS Linear Trend + 7D Rolling Window",
+        "trend_slope": round(float(slope), 4),
+        "mean_absolute_error_mae": round(mae, 2),
+        "historical_days_evaluated": len(daily)
+    }
+
+    return daily, df_forecast, metrics
