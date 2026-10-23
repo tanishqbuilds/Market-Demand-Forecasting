@@ -26,9 +26,12 @@ HDFS_ROOT = os.environ.get("HDFS_ROOT", "hdfs://namenode:9000/market-demand")
 FEATURE_COLUMNS = [
     "lag_1",
     "lag_7",
+    "lag_14",
+    "lag_21",
     "lag_28",
     "rolling_mean_7d",
     "rolling_mean_28d",
+    "weekday_4week_mean",
     "weekday",
     "month",
     "median_unit_price",
@@ -178,9 +181,15 @@ def run_pipeline():
             calendar_demand
             .withColumn("lag_1", F.lag("units_sold", 1).over(history))
             .withColumn("lag_7", F.lag("units_sold", 7).over(history))
+            .withColumn("lag_14", F.lag("units_sold", 14).over(history))
+            .withColumn("lag_21", F.lag("units_sold", 21).over(history))
             .withColumn("lag_28", F.lag("units_sold", 28).over(history))
             .withColumn("rolling_mean_7d", F.avg("units_sold").over(previous_7))
             .withColumn("rolling_mean_28d", F.avg("units_sold").over(previous_28))
+            .withColumn(
+                "weekday_4week_mean",
+                (F.col("lag_7") + F.col("lag_14") + F.col("lag_21") + F.col("lag_28")) / 4.0,
+            )
             .withColumn("weekday", F.dayofweek("date").cast("double"))
             .withColumn("month", F.month("date").cast("double"))
             .withColumn("median_unit_price", F.coalesce("median_unit_price", F.lit(0.0)))
@@ -208,6 +217,10 @@ def run_pipeline():
         validation_predictions = model.transform(validation)
         validation_predictions = validation_predictions.withColumn(
             "baseline_prediction", F.col("rolling_mean_7d")
+        ).withColumn(
+            "weekly_seasonal_prediction", F.col("lag_7")
+        ).withColumn(
+            "four_week_weekday_prediction", F.col("weekday_4week_mean")
         )
         evaluation = validation_predictions.agg(
             F.count("units_sold").alias("validation_rows"),
@@ -215,7 +228,45 @@ def run_pipeline():
             F.sqrt(F.avg(F.pow(F.col("units_sold") - F.col("ml_prediction"), 2))).alias("ml_rmse"),
             F.avg(F.abs(F.col("units_sold") - F.col("baseline_prediction"))).alias("baseline_mae"),
             F.sqrt(F.avg(F.pow(F.col("units_sold") - F.col("baseline_prediction"), 2))).alias("baseline_rmse"),
+            F.avg(F.abs(F.col("units_sold") - F.col("weekly_seasonal_prediction"))).alias("weekly_seasonal_mae"),
+            F.sqrt(F.avg(F.pow(F.col("units_sold") - F.col("weekly_seasonal_prediction"), 2))).alias("weekly_seasonal_rmse"),
+            F.avg(F.abs(F.col("units_sold") - F.col("four_week_weekday_prediction"))).alias("four_week_weekday_mae"),
+            F.sqrt(F.avg(F.pow(F.col("units_sold") - F.col("four_week_weekday_prediction"), 2))).alias("four_week_weekday_rmse"),
         ).first().asDict()
+
+        validation_slices = (
+            validation_predictions
+            .withColumn(
+                "actual_demand_band",
+                F.when(F.col("units_sold") == 0, "0 units")
+                .when(F.col("units_sold") <= 5, "1-5 units")
+                .when(F.col("units_sold") <= 20, "6-20 units")
+                .when(F.col("units_sold") <= 100, "21-100 units")
+                .otherwise("Over 100 units"),
+            )
+            .groupBy("actual_demand_band")
+            .agg(
+                F.count("units_sold").alias("product_days"),
+                F.avg(F.abs(F.col("units_sold") - F.col("ml_prediction"))).alias("ml_mae"),
+                F.avg(F.abs(F.col("units_sold") - F.col("baseline_prediction"))).alias("rolling_7d_mae"),
+                F.avg(F.abs(F.col("units_sold") - F.col("four_week_weekday_prediction"))).alias("four_week_weekday_mae"),
+            )
+            .orderBy("actual_demand_band")
+            .toPandas()
+        )
+        product_validation = (
+            validation_predictions
+            .groupBy("product_id")
+            .agg(
+                F.first("product_name", ignorenulls=True).alias("product_name"),
+                F.sum("units_sold").alias("actual_units"),
+                F.sum(F.greatest(F.lit(0.0), F.col("ml_prediction"))).alias("ml_predicted_units"),
+                F.sum(F.greatest(F.lit(0.0), F.col("four_week_weekday_prediction"))).alias("weekday_baseline_units"),
+                F.avg(F.abs(F.col("units_sold") - F.col("ml_prediction"))).alias("ml_mae"),
+                F.avg(F.abs(F.col("units_sold") - F.col("four_week_weekday_prediction"))).alias("weekday_baseline_mae"),
+            )
+        )
+        top_product_validation = product_validation.orderBy(F.desc("actual_units")).limit(20).toPandas()
 
         # Prepare features for the day after the final observation. The 7-day
         # projection holds this next-day estimate flat, so it is an educational
@@ -225,6 +276,8 @@ def run_pipeline():
         forecast_inputs = (
             calendar_demand
             .withColumn("next_lag_7", F.lag("units_sold", 6).over(history))
+            .withColumn("next_lag_14", F.lag("units_sold", 13).over(history))
+            .withColumn("next_lag_21", F.lag("units_sold", 20).over(history))
             .withColumn("next_lag_28", F.lag("units_sold", 27).over(history))
             .withColumn("next_rolling_mean_7d", F.avg("units_sold").over(next_7))
             .withColumn("next_rolling_mean_28d", F.avg("units_sold").over(next_28))
@@ -233,16 +286,19 @@ def run_pipeline():
                 "product_id", "product_name", "date", "units_sold", "median_unit_price",
                 F.col("units_sold").alias("lag_1"),
                 F.col("next_lag_7").alias("lag_7"),
+                F.col("next_lag_14").alias("lag_14"),
+                F.col("next_lag_21").alias("lag_21"),
                 F.col("next_lag_28").alias("lag_28"),
                 F.col("next_rolling_mean_7d").alias("rolling_mean_7d"),
                 F.col("next_rolling_mean_28d").alias("rolling_mean_28d"),
+                ((F.col("next_lag_7") + F.col("next_lag_14") + F.col("next_lag_21") + F.col("next_lag_28")) / 4.0).alias("weekday_4week_mean"),
                 F.dayofweek(F.date_add("date", 1)).cast("double").alias("weekday"),
                 F.month(F.date_add("date", 1)).cast("double").alias("month"),
             )
             .dropna(subset=FEATURE_COLUMNS)
         )
         forecasts = model.transform(forecast_inputs).select(
-            "product_id", "product_name", "date", "units_sold", "rolling_mean_7d",
+            "product_id", "product_name", "date", "units_sold", "rolling_mean_7d", "weekday_4week_mean",
             "ml_prediction", "median_unit_price",
         )
         forecasts = (
@@ -250,6 +306,8 @@ def run_pipeline():
             .withColumn("forecast_next_day_units", F.greatest(F.lit(0.0), F.col("ml_prediction")))
             .withColumn("forecast_next_7d_units", F.ceil(F.col("forecast_next_day_units") * 7))
             .withColumn("baseline_next_7d_units", F.ceil(F.col("rolling_mean_7d") * 7))
+            .withColumn("weekday_baseline_next_day_units", F.greatest(F.lit(0.0), F.col("weekday_4week_mean")))
+            .withColumn("weekday_baseline_next_7d_units", F.ceil(F.col("weekday_baseline_next_day_units") * 7))
             .withColumn("assumed_lead_time_days", F.lit(7))
             .withColumn("demand_buffer_units", F.ceil(F.lit(1.65) * F.sqrt(F.lit(7.0)) * F.sqrt(F.col("rolling_mean_7d"))))
             .withColumn("reorder_point_proxy_units", F.col("forecast_next_7d_units") + F.col("demand_buffer_units"))
@@ -263,6 +321,8 @@ def run_pipeline():
         forecasts.orderBy(F.desc("forecast_next_7d_units")).toPandas().to_csv(
             OUTPUT_DIR / "product_forecasts.csv", index=False
         )
+        validation_slices.to_csv(OUTPUT_DIR / "validation_demand_segments.csv", index=False)
+        top_product_validation.to_csv(OUTPUT_DIR / "validation_top_products.csv", index=False)
         evaluation_payload = {
             "dataset": metadata["dataset"],
             "source_start_date": metadata["start_date"],
@@ -275,12 +335,16 @@ def run_pipeline():
             "validation_start": str(validation_start),
             "validation_end": str(latest_date),
             "evaluation": {key: float(value) if value is not None else None for key, value in evaluation.items()},
+            "validation_demand_segments": validation_slices.to_dict(orient="records"),
+            "validation_top_products": top_product_validation.to_dict(orient="records"),
             "hdfs_root": HDFS_ROOT,
             "outputs": {
                 "bronze_transactions": bronze_path,
                 "silver_daily_product_market": daily_market_path,
                 "gold_daily_features": feature_path,
                 "gold_product_forecasts": forecast_path,
+                "validation_demand_segments_csv": str(OUTPUT_DIR / "validation_demand_segments.csv"),
+                "validation_top_products_csv": str(OUTPUT_DIR / "validation_top_products.csv"),
             },
             "inventory_note": "No inventory, store, or supplier data exists in the UCI dataset. Reorder point is a demand-only proxy with an assumed 7-day lead time, not an order recommendation.",
         }

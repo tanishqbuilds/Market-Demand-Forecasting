@@ -24,10 +24,10 @@ Stop the stack with `Ctrl+C`, then run `docker compose down` to stop its contain
 1. **Source and ingestion:** downloads the same UCI workbook used by the existing app. The current Python loader normalizes the source into product and sales-line CSV files.
 2. **Spark validation and ETL:** PySpark reads the normalized transaction CSV, checks required fields, filters invalid sales, removes exact duplicate rows, and creates daily aggregates by product and country.
 3. **Storage:** writes line-level, daily-market, engineered-feature, and forecast datasets in Parquet format to HDFS. HDFS replication is configured across two DataNode containers.
-4. **Feature engineering:** builds daily product series, fills dates without recorded sales with zero, and calculates lag values, rolling means, weekday, month, and observed median price.
-5. **Forecasting and evaluation:** trains a Spark Gradient-Boosted Trees regressor, compares it with a 7-day rolling-average baseline on the final 30 historical days, and estimates the next day per product. A flat seven-day projection is provided for demonstration.
+4. **Feature engineering:** builds daily product series, fills dates without recorded sales with zero, and calculates 1/7/14/21/28-day lags, 7/28-day rolling means, same-weekday four-week average, weekday, month, and observed median price.
+5. **Forecasting and evaluation:** trains a Spark Gradient-Boosted Trees regressor and compares it with recent 7-day average, previous-week same-day, and four-week same-weekday averages on the final 30 historical days. It reports overall MAE/RMSE, errors by actual demand band, and per-product results for the 20 highest-volume validation products. A flat seven-day projection is provided for demonstration.
 6. **Inventory decision signals:** displays demand cover and a reorder-point proxy using an assumed 7-day lead time. These are not actual order recommendations because UCI has no stock levels, supplier lead times, or store IDs.
-7. **Dashboard:** the new **End-to-End Pipeline** tab shows the model metrics, highest projected product demand, and the HDFS output locations.
+7. **Dashboard:** the **End-to-End Pipeline** tab shows model and baseline metrics, validation error slices, top-product validation results, side-by-side forecast comparisons, and HDFS output locations.
 
 ## HDFS note
 

@@ -11,6 +11,7 @@ Zero frontend build overhead; runs entirely from Python backend.
 import json
 from pathlib import Path
 
+import altair as alt
 import streamlit as st
 import pandas as pd
 from storage_and_data import (
@@ -504,6 +505,8 @@ with tab_pipeline:
     pipeline_dir = Path(__file__).resolve().parent / "pipeline_outputs"
     summary_file = pipeline_dir / "pipeline_summary.json"
     forecasts_file = pipeline_dir / "product_forecasts.csv"
+    segment_file = pipeline_dir / "validation_demand_segments.csv"
+    product_validation_file = pipeline_dir / "validation_top_products.csv"
 
     if summary_file.exists() and forecasts_file.exists():
         summary = json.loads(summary_file.read_text(encoding="utf-8"))
@@ -514,26 +517,49 @@ with tab_pipeline:
             f"PySpark validated and transformed {summary['clean_rows_after_spark']:,} sales lines. "
             f"The 30-day holdout covers {summary['validation_start']} to {summary['validation_end']}."
         )
-        metric_cols = st.columns(4)
+        metric_cols = st.columns(3)
         metric_cols[0].metric("ML model MAE", f"{evaluation['ml_mae']:.2f} units")
-        metric_cols[1].metric("7-day baseline MAE", f"{evaluation['baseline_mae']:.2f} units")
-        metric_cols[2].metric("ML model RMSE", f"{evaluation['ml_rmse']:.2f} units")
-        metric_cols[3].metric("Baseline RMSE", f"{evaluation['baseline_rmse']:.2f} units")
+        metric_cols[1].metric("Recent 7-day average MAE", f"{evaluation['baseline_mae']:.2f} units")
+        metric_cols[2].metric("Same weekday, 4-week average MAE", f"{evaluation['four_week_weekday_mae']:.2f} units")
+        rmse_cols = st.columns(3)
+        rmse_cols[0].metric("ML model RMSE", f"{evaluation['ml_rmse']:.2f} units")
+        rmse_cols[1].metric("Recent 7-day average RMSE", f"{evaluation['baseline_rmse']:.2f} units")
+        rmse_cols[2].metric("Same weekday, 4-week average RMSE", f"{evaluation['four_week_weekday_rmse']:.2f} units")
         st.caption(
-            "The ML model has lower MAE on this holdout, while its RMSE is slightly higher; "
-            "large errors on high-volume days remain. This historical test does not establish "
-            "that the ML model will perform better on future data."
+            "Lower is better. Each score covers all product-days in the held-out month, including days with no sales. "
+            "The demand-segment and product tables below expose where errors are concentrated."
         )
+
+        if segment_file.exists():
+            st.markdown("##### Validation errors by actual daily demand")
+            st.caption("This separates the many zero/low-sales days from high-volume days.")
+            st.dataframe(pd.read_csv(segment_file), use_container_width=True, hide_index=True)
+        if product_validation_file.exists():
+            st.markdown("##### Validation results for the 20 highest-volume products")
+            st.caption("Totals cover the held-out month; MAE is the average daily error for that product.")
+            st.dataframe(pd.read_csv(product_validation_file), use_container_width=True, hide_index=True)
 
         st.markdown("##### Highest projected product demand")
         st.caption(
-            "Seven-day projection holds the model's next-day demand estimate flat. "
+            "The model's 7-day projection holds its next-day estimate flat; the simple comparator extends the recent 7-day average. "
             "The reorder point is only a demand buffer proxy; stock and supplier data are unavailable."
         )
         leaders = pipeline_forecasts.nlargest(15, "forecast_next_7d_units")
-        chart = leaders.set_index("product_id")[["forecast_next_7d_units", "baseline_next_7d_units"]]
-        chart.columns = ["ML projected units", "7-day baseline units"]
-        st.bar_chart(chart)
+        chart_data = leaders[["product_id", "forecast_next_7d_units", "baseline_next_7d_units"]].melt(
+            id_vars="product_id", var_name="forecast_type", value_name="projected_units"
+        )
+        chart_data["forecast_type"] = chart_data["forecast_type"].map({
+            "forecast_next_7d_units": "ML model",
+            "baseline_next_7d_units": "Recent 7-day average",
+        })
+        comparison_chart = alt.Chart(chart_data).mark_bar().encode(
+            x=alt.X("product_id:N", title="Product ID", axis=alt.Axis(labelAngle=-45)),
+            xOffset=alt.XOffset("forecast_type:N"),
+            y=alt.Y("projected_units:Q", title="Projected units over 7 days"),
+            color=alt.Color("forecast_type:N", title="Forecast method"),
+            tooltip=["product_id:N", "forecast_type:N", "projected_units:Q"],
+        ).properties(height=360)
+        st.altair_chart(comparison_chart, use_container_width=True)
         st.dataframe(
             leaders[[
                 "product_id", "product_name", "forecast_next_day_units",
