@@ -1,0 +1,7 @@
+.git
+.venv
+__pycache__
+*.pyc
+hdfs_sim
+pipeline_outputs
+nosql_sim.json

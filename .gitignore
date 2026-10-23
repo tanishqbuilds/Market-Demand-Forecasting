@@ -3,3 +3,4 @@ __pycache__/
 hdfs_sim/
 nosql_sim.json
 .streamlit/
+pipeline_outputs/

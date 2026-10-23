@@ -1,0 +1,84 @@
+services:
+  namenode:
+    build:
+      context: ./docker/hadoop
+    command: ["namenode"]
+    hostname: namenode
+    environment:
+      HDFS_ROLE: namenode
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    volumes:
+      - hdfs_namenode:/hadoop/dfs/name
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9870/dfshealth.html >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  datanode1:
+    build:
+      context: ./docker/hadoop
+    command: ["datanode"]
+    hostname: datanode1
+    environment:
+      HDFS_ROLE: datanode
+    volumes:
+      - hdfs_datanode1:/hadoop/dfs/data
+    depends_on:
+      namenode:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9864/ >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  datanode2:
+    build:
+      context: ./docker/hadoop
+    command: ["datanode"]
+    hostname: datanode2
+    environment:
+      HDFS_ROLE: datanode
+    volumes:
+      - hdfs_datanode2:/hadoop/dfs/data
+    depends_on:
+      namenode:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9864/ >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      HADOOP_CONF_DIR: /opt/hadoop-conf
+      HDFS_ROOT: hdfs://namenode:9000/market-demand
+      SPARK_SHUFFLE_PARTITIONS: "8"
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./hdfs_sim:/app/hdfs_sim
+      - ./pipeline_outputs:/app/pipeline_outputs
+    command:
+      - sh
+      - -c
+      - python pipeline_runner.py && streamlit run app.py --server.address=0.0.0.0
+    depends_on:
+      namenode:
+        condition: service_healthy
+      datanode1:
+        condition: service_healthy
+      datanode2:
+        condition: service_healthy
+
+volumes:
+  hdfs_namenode:
+  hdfs_datanode1:
+  hdfs_datanode2:

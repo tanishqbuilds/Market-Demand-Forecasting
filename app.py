@@ -8,6 +8,9 @@ Tech Stack: Python 3.10+, Streamlit, Scikit-Learn, Pandas, NumPy.
 Zero frontend build overhead; runs entirely from Python backend.
 """
 
+import json
+from pathlib import Path
+
 import streamlit as st
 import pandas as pd
 from storage_and_data import (
@@ -137,13 +140,14 @@ with st.sidebar:
     st.metric(label="Recorded sales", value=f"£{df_transactions['total_revenue'].sum():,.2f}")
 
 # Main Navigation Tabs
-tab_dashboard, tab_hdfs, tab_mr, tab_stream, tab_cluster, tab_forecast = st.tabs([
+tab_dashboard, tab_hdfs, tab_mr, tab_stream, tab_cluster, tab_forecast, tab_pipeline = st.tabs([
     "[0] Decision Dashboard",
-    "[1] Storage & HDFS Topology",
+    "[1] Storage Concepts (Simulation)",
     "[2] MapReduce Execution",
     "[3] Stream Mining Engine",
     "[4] Similarity & Clustering",
-    "[5] Demand Forecasting"
+    "[5] Demand Forecasting",
+    "[6] End-to-End Pipeline"
 ])
 
 # ===============================================================================
@@ -491,3 +495,65 @@ with tab_forecast:
         })
     else:
         st.warning("Insufficient transaction history to construct forecast.")
+
+# ===============================================================================
+# TAB 6: End-to-End PySpark + HDFS Pipeline
+# ===============================================================================
+with tab_pipeline:
+    st.markdown("#### UCI Retail Pipeline Results")
+    pipeline_dir = Path(__file__).resolve().parent / "pipeline_outputs"
+    summary_file = pipeline_dir / "pipeline_summary.json"
+    forecasts_file = pipeline_dir / "product_forecasts.csv"
+
+    if summary_file.exists() and forecasts_file.exists():
+        summary = json.loads(summary_file.read_text(encoding="utf-8"))
+        pipeline_forecasts = pd.read_csv(forecasts_file)
+        evaluation = summary["evaluation"]
+
+        st.caption(
+            f"PySpark validated and transformed {summary['clean_rows_after_spark']:,} sales lines. "
+            f"The 30-day holdout covers {summary['validation_start']} to {summary['validation_end']}."
+        )
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("ML model MAE", f"{evaluation['ml_mae']:.2f} units")
+        metric_cols[1].metric("7-day baseline MAE", f"{evaluation['baseline_mae']:.2f} units")
+        metric_cols[2].metric("ML model RMSE", f"{evaluation['ml_rmse']:.2f} units")
+        metric_cols[3].metric("Baseline RMSE", f"{evaluation['baseline_rmse']:.2f} units")
+        st.caption(
+            "The ML model has lower MAE on this holdout, while its RMSE is slightly higher; "
+            "large errors on high-volume days remain. This historical test does not establish "
+            "that the ML model will perform better on future data."
+        )
+
+        st.markdown("##### Highest projected product demand")
+        st.caption(
+            "Seven-day projection holds the model's next-day demand estimate flat. "
+            "The reorder point is only a demand buffer proxy; stock and supplier data are unavailable."
+        )
+        leaders = pipeline_forecasts.nlargest(15, "forecast_next_7d_units")
+        chart = leaders.set_index("product_id")[["forecast_next_7d_units", "baseline_next_7d_units"]]
+        chart.columns = ["ML projected units", "7-day baseline units"]
+        st.bar_chart(chart)
+        st.dataframe(
+            leaders[[
+                "product_id", "product_name", "forecast_next_day_units",
+                "forecast_next_7d_units", "baseline_next_7d_units",
+                "demand_buffer_units", "reorder_point_proxy_units",
+            ]],
+            use_container_width=True,
+        )
+        with st.expander("Pipeline stages and HDFS output paths"):
+            st.write("**HDFS root:**", summary["hdfs_root"])
+            st.json(summary["outputs"])
+            st.caption(
+                "The Docker cluster runs a real NameNode and two DataNode processes with "
+                "replication factor 2. They share one computer, so this is not multi-machine "
+                "fault tolerance."
+            )
+        st.warning(summary["inventory_note"])
+    else:
+        st.info(
+            "Pipeline output is not present yet. Start the full local stack from the project "
+            "folder with `docker compose up --build`. The first run downloads the free Hadoop "
+            "image layers and UCI source dataset, runs PySpark, and writes Parquet to HDFS."
+        )

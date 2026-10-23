@@ -1,42 +1,51 @@
-# Market Demand Forecasting Workbench
+# Market Demand Forecasting Pipeline
 
-An educational Big Data Analytics dashboard built with Python and Streamlit. It uses real historical retail sales from the UCI Machine Learning Repository to demonstrate data preparation, aggregation, stream algorithms, product similarity, clustering, and simple demand forecasting.
+An educational end-to-end Big Data Analytics project using the UCI Online Retail dataset. The full local stack uses Apache Hadoop HDFS, PySpark, Parquet, and the existing Streamlit dashboard. The software and local pipeline are free; no paid cloud services are used.
 
-## Run locally
+## Run the full pipeline (Windows)
+
+Prerequisites: Docker Desktop with its engine running, an internet connection for the first build and UCI download, and enough free disk space for the Hadoop image and local data.
+
+From this project folder, run:
 
 ```powershell
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-streamlit run app.py
+docker compose up --build
 ```
 
-On first launch, the app downloads the UCI dataset, cleans it, and stores normalized CSV files under `hdfs_sim/`. This requires an internet connection. Later launches use the local cached CSVs; use **Reload dataset from UCI** in the sidebar to download and prepare the source again. Open the URL printed by Streamlit, usually <http://localhost:8501>.
+The first run builds a small Hadoop image and downloads the UCI dataset if it is not cached. The pipeline then validates and cleans the normalized sales in Spark, writes Parquet datasets to HDFS, fits and evaluates a forecasting model, saves a local results summary, and starts Streamlit.
 
-## Data source and preparation
+- Streamlit dashboard: <http://localhost:8501>
+- HDFS NameNode status: <http://localhost:9870>
 
-The app uses the [UCI Online Retail dataset](https://archive.ics.uci.edu/dataset/352/online+retail), containing transactions from a UK-based online retailer between December 2010 and December 2011. It records invoices, product codes and descriptions, quantities, timestamps, unit prices, customer IDs, and countries. Prices are in British pounds (GBP).
+Stop the stack with `Ctrl+C`, then run `docker compose down` to stop its containers. Named HDFS volumes are retained between runs. Do not remove volumes if you want to keep the HDFS files.
 
-The app excludes cancellation invoices, non-product stock codes, rows with missing required sales fields, invalid dates, and rows with non-positive quantities or prices. It does not fabricate product categories or costs, which are not present in the source. Catalog prices are observed median unit prices; product tags are words taken from the source descriptions. Some customer IDs are missing in the original data.
+## Pipeline stages
 
-The source workbook is read from the official UCI archive and is not committed to the repository. The cleaned local cache and JSON results store are ignored by Git.
+1. **Source and ingestion:** downloads the same UCI workbook used by the existing app. The current Python loader normalizes the source into product and sales-line CSV files.
+2. **Spark validation and ETL:** PySpark reads the normalized transaction CSV, checks required fields, filters invalid sales, removes exact duplicate rows, and creates daily aggregates by product and country.
+3. **Storage:** writes line-level, daily-market, engineered-feature, and forecast datasets in Parquet format to HDFS. HDFS replication is configured across two DataNode containers.
+4. **Feature engineering:** builds daily product series, fills dates without recorded sales with zero, and calculates lag values, rolling means, weekday, month, and observed median price.
+5. **Forecasting and evaluation:** trains a Spark Gradient-Boosted Trees regressor, compares it with a 7-day rolling-average baseline on the final 30 historical days, and estimates the next day per product. A flat seven-day projection is provided for demonstration.
+6. **Inventory decision signals:** displays demand cover and a reorder-point proxy using an assumed 7-day lead time. These are not actual order recommendations because UCI has no stock levels, supplier lead times, or store IDs.
+7. **Dashboard:** the new **End-to-End Pipeline** tab shows the model metrics, highest projected product demand, and the HDFS output locations.
 
-## What the dashboard demonstrates
+## HDFS note
 
-- **Decision dashboard:** headline revenue, invoice, customer, and average invoice metrics; monthly revenue and unit trends; top products by revenue and volume; and revenue by country. These summarize historical activity and do not account for inventory, cost, or margin.
-- **Storage:** local CSV and JSON files demonstrate storage concepts. The HDFS block metadata, NameNode, replicas, and rack layout are visual simulations, not a Hadoop cluster.
-- **MapReduce-style aggregation and join:** product sales are grouped and joined in one Python process. This illustrates Map, partitioning, and Reduce; it does not distribute work across machines.
-- **Stream mining:** Bloom filter, DGIM, and Flajolet–Martin examples operate on bounded samples from the real dataset, not a live event feed.
-- **Product analysis:** Jaccard similarity compares words in product descriptions for the 30 best-selling products. K-Means groups products using scaled median price and total quantity sold. The representative-point display is illustrative; this is not a CURE implementation.
-- **Forecasting:** a moving average and linear trend are shown for a selected product. MAE is measured on the final held-out historical days before the trend is fit to all history for the example projection.
+This uses real Hadoop HDFS services: one NameNode and two DataNode processes in Docker containers. They all run on the same computer. This demonstrates HDFS storage and replication, but does not provide machine-level fault tolerance or production security. The older storage tab in the original workbench remains an illustrative local-storage simulation.
 
-## Limitations
+## Data limits
 
-This is a classroom demonstration, not a production inventory or forecasting service. The source data is historical and should not be used as a current sales forecast. The simulated storage, processing, and streaming components are local; there is no distributed cluster, real NoSQL server, or live sales connection. The simple forecast is not benchmarked against robust forecasting models or business costs.
+The dataset describes UK online retail transactions from December 2010 through December 2011. It contains product descriptions, quantities, prices, invoice timestamps, customer IDs, and countries. Country is used only as a rough market grouping; it is not a store identifier. There are no inventory balances, costs, supplier lead times, promotions, or holiday calendar. Consequently, the forecast is historical and educational, and inventory outputs are demand-only proxies.
 
-## Project files
+## Existing demonstrations
 
-- `app.py` — Streamlit dashboard
-- `storage_and_data.py` — UCI download, cleaning, local storage adapters
-- `bigdata_algorithms.py` — analytics demonstrations
-- `requirements.txt` — Python dependencies, including the Excel reader used for the source workbook
+The original tabs remain available for the local HDFS concept simulation, MapReduce-style aggregation and join, stream-mining algorithms, product similarity and clustering, and the per-product forecasting walkthrough.
+
+## Main project files
+
+- `pipeline_runner.py` — PySpark ETL, features, model evaluation, and HDFS Parquet writes.
+- `docker-compose.yml` — local NameNode, two DataNodes, and Streamlit pipeline services.
+- `docker/hadoop/` — Hadoop image, HDFS configuration, and service entrypoint.
+- `storage_and_data.py` — UCI download, source normalization, local cache, and original storage adapter.
+- `app.py` — Streamlit dashboards and analytics demonstrations.
+- `bigdata_algorithms.py` — original algorithm demonstrations and simple forecasting helper.
