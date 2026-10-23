@@ -1,23 +1,38 @@
 # Market Demand Forecasting Pipeline
 
-An educational end-to-end Big Data Analytics project using the UCI Online Retail dataset. The full local stack uses Apache Hadoop HDFS, PySpark, Parquet, and the existing Streamlit dashboard. The software and local pipeline are free; no paid cloud services are used.
+An educational end-to-end data engineering and analytics project built around the [UCI Online Retail dataset](https://archive.ics.uci.edu/dataset/352/online+retail). It demonstrates source ingestion and normalization, Spark ETL, a local Hadoop HDFS data lake, daily demand feature engineering, forecasting and evaluation, and a Streamlit dashboard.
 
-## Run the full pipeline (Windows)
+The project runs locally in Docker. Spark runs in local mode inside the application container; HDFS is provided by one NameNode and two DataNodes. This is a learning environment, not a production or multi-machine deployment.
 
-Prerequisites: Docker Desktop with its engine running, an internet connection for the first build and UCI download, and enough free disk space for the Hadoop image and local data.
+## Run with Docker Desktop
 
-From this project folder, run:
+Prerequisites: Windows with Docker Desktop installed and running, internet access for the first image build and dataset download, and enough disk space for the images and data.
+
+Open PowerShell in the project directory and start the stack:
 
 ```powershell
 docker compose up --build
 ```
 
-The first run builds a small Hadoop image and downloads the UCI dataset if it is not cached. The pipeline then validates and cleans the normalized sales in Spark, writes Parquet datasets to HDFS, fits and evaluates a forecasting model, saves a local results summary, and starts Streamlit.
+The first run builds the application and Hadoop images. The application downloads and normalizes the UCI workbook, runs the Spark pipeline, writes its lake datasets, and then starts Streamlit.
 
-- Streamlit dashboard: <http://localhost:8501>
-- HDFS NameNode status: <http://localhost:9870>
+- Dashboard: <http://localhost:8501>
+- Hadoop NameNode status: <http://localhost:9870>
 
-Stop the stack with `Ctrl+C`, then run `docker compose down` to stop its containers. Named HDFS volumes are retained between runs. Do not remove volumes if you want to keep the HDFS files.
+To run in the background and follow application logs:
+
+```powershell
+docker compose up --build -d
+docker compose logs -f app
+```
+
+Stop the foreground stack with `Ctrl+C`, or stop a background stack with:
+
+```powershell
+docker compose down
+```
+
+`docker compose down` retains the named HDFS volumes and local output directories. To also delete the HDFS volumes, run `docker compose down -v`; this permanently removes the HDFS data.
 
 ## Pipeline stages
 
