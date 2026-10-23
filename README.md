@@ -23,6 +23,7 @@ The source workbook is read from the official UCI archive and is not committed t
 
 ## What the dashboard demonstrates
 
+- **Decision dashboard:** headline revenue, invoice, customer, and average invoice metrics; monthly revenue and unit trends; top products by revenue and volume; and revenue by country. These summarize historical activity and do not account for inventory, cost, or margin.
 - **Storage:** local CSV and JSON files demonstrate storage concepts. The HDFS block metadata, NameNode, replicas, and rack layout are visual simulations, not a Hadoop cluster.
 - **MapReduce-style aggregation and join:** product sales are grouped and joined in one Python process. This illustrates Map, partitioning, and Reduce; it does not distribute work across machines.
 - **Stream mining:** Bloom filter, DGIM, and Flajolet–Martin examples operate on bounded samples from the real dataset, not a live event feed.

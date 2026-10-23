@@ -137,13 +137,99 @@ with st.sidebar:
     st.metric(label="Recorded sales", value=f"£{df_transactions['total_revenue'].sum():,.2f}")
 
 # Main Navigation Tabs
-tab_hdfs, tab_mr, tab_stream, tab_cluster, tab_forecast = st.tabs([
+tab_dashboard, tab_hdfs, tab_mr, tab_stream, tab_cluster, tab_forecast = st.tabs([
+    "[0] Decision Dashboard",
     "[1] Storage & HDFS Topology",
     "[2] MapReduce Execution",
     "[3] Stream Mining Engine",
     "[4] Similarity & Clustering",
     "[5] Demand Forecasting"
 ])
+
+# ===============================================================================
+# TAB 0: Decision Dashboard
+# ===============================================================================
+with tab_dashboard:
+    st.markdown("#### Sales & Demand Overview")
+    st.caption(
+        f"Historical UCI retail sales from {dataset_metadata['start_date']} to "
+        f"{dataset_metadata['end_date']} (GBP). Use this view to prioritize products "
+        "and markets for investigation; it is not a live or current-period forecast."
+    )
+
+    total_revenue = df_transactions["total_revenue"].sum()
+    total_orders = df_transactions["tx_id"].nunique()
+    identified_customers = df_transactions["customer_id"].nunique()
+    average_order_value = total_revenue / max(total_orders, 1)
+    kpi_revenue, kpi_orders, kpi_customers, kpi_aov = st.columns(4)
+    kpi_revenue.metric("Recorded revenue", f"£{total_revenue:,.0f}")
+    kpi_orders.metric("Invoices", f"{total_orders:,}")
+    kpi_customers.metric("Identified customers", f"{identified_customers:,}")
+    kpi_aov.metric("Average invoice value", f"£{average_order_value:,.2f}")
+
+    dashboard_sales = df_transactions.copy()
+    dashboard_sales["date"] = pd.to_datetime(dashboard_sales["date"], errors="coerce")
+    dashboard_sales["month"] = dashboard_sales["date"].dt.to_period("M").astype(str)
+    monthly_revenue = (
+        dashboard_sales.groupby("month")["total_revenue"]
+        .sum().rename("Revenue (£)").to_frame()
+    )
+    monthly_units = (
+        dashboard_sales.groupby("month")["quantity"]
+        .sum().rename("Units sold").to_frame()
+    )
+
+    product_summary = (
+        dashboard_sales.groupby("product_id", as_index=False)
+        .agg(units_sold=("quantity", "sum"), revenue=("total_revenue", "sum"))
+        .merge(df_products[["product_id", "name"]], on="product_id", how="left")
+    )
+    product_summary["label"] = (
+        product_summary["product_id"].astype(str) + " — "
+        + product_summary["name"].fillna("Unknown product")
+    )
+    country_summary = (
+        dashboard_sales.groupby("country")["total_revenue"]
+        .sum().sort_values(ascending=False).head(10)
+        .rename("Revenue (£)").to_frame()
+    )
+
+    trend_col, country_col = st.columns([1.6, 1])
+    with trend_col:
+        st.markdown("##### Monthly revenue and units")
+        st.caption("Revenue shows market activity; units help distinguish price mix from volume.")
+        st.line_chart(monthly_revenue)
+        st.bar_chart(monthly_units)
+    with country_col:
+        st.markdown("##### Top markets by revenue")
+        st.caption("Top 10 countries by recorded sales value.")
+        st.bar_chart(country_summary)
+        if len(country_summary) > 0:
+            country_share = country_summary.iloc[0, 0] / max(total_revenue, 1) * 100
+            st.info(
+                f"{country_summary.index[0]} accounts for {country_share:.1f}% of "
+                "recorded revenue. Consider this concentration when reviewing market exposure."
+            )
+
+    st.markdown("##### Product priorities")
+    st.caption("Revenue leaders can inform commercial focus; unit leaders can inform historical demand planning.")
+    leaders_col, volume_col = st.columns(2)
+    with leaders_col:
+        st.markdown("**Top products by revenue**")
+        revenue_leaders = product_summary.nlargest(10, "revenue").set_index("label")[["revenue"]]
+        revenue_leaders.columns = ["Revenue (£)"]
+        st.bar_chart(revenue_leaders)
+    with volume_col:
+        st.markdown("**Top products by units sold**")
+        volume_leaders = product_summary.nlargest(10, "units_sold").set_index("label")[["units_sold"]]
+        volume_leaders.columns = ["Units sold"]
+        st.bar_chart(volume_leaders)
+
+    st.caption(
+        "Decision limits: the source covers one historical year, has no inventory, "
+        "cost, margin, or stockout data, and may not reflect current demand. Validate "
+        "any replenishment or market decision against current business data."
+    )
 
 # ==============================================================================
 # TAB 1: Storage & HDFS Topology
