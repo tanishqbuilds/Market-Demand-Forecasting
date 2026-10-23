@@ -31,6 +31,7 @@ from bigdata_algorithms import (
     cluster_products_kmeans,
     forecast_product_demand
 )
+from dashboard_ui import inject_theme_css, render_decision_dashboard, render_pipeline_dashboard
 
 # Page configuration
 st.set_page_config(
@@ -42,6 +43,103 @@ st.set_page_config(
 # Custom Clean CSS (No gimmicks, enterprise data platform typography)
 st.markdown("""
 <style>
+    /* Completely hide Streamlit default top header bar (white bar) */
+    header[data-testid="stHeader"],
+    [data-testid="stHeader"],
+    .stApp > header {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0px !important;
+        background: transparent !important;
+    }
+    #MainMenu { visibility: hidden !important; }
+    footer { visibility: hidden !important; }
+    [data-testid="stDecoration"] { display: none !important; }
+    .stAppDeployButton { display: none !important; }
+    div[data-testid="stToolbar"] { display: none !important; }
+    div[data-testid="stSidebarCollapseButton"] {
+        top: 10px !important;
+    }
+
+    .stApp {
+        margin-top: 0px !important;
+        padding-top: 0px !important;
+    }
+    .block-container {
+        padding-top: 1.2rem !important;
+        padding-bottom: 2rem !important;
+    }
+
+    /* Streamlit Tabs Navigation Bar */
+    div[data-baseweb="tab-list"] {
+        gap: 6px !important;
+        background-color: transparent !important;
+        border-bottom: 2px solid #E2E8F0 !important;
+        padding-bottom: 4px !important;
+        margin-bottom: 16px !important;
+    }
+
+    button[data-baseweb="tab"] {
+        background-color: transparent !important;
+        border: 1px solid transparent !important;
+        border-radius: 6px !important;
+        padding: 8px 16px !important;
+    }
+
+    button[data-baseweb="tab"] p,
+    button[data-baseweb="tab"] span,
+    button[data-baseweb="tab"] div {
+        color: #334155 !important; /* Visible dark slate text */
+        font-size: 13px !important;
+        font-weight: 600 !important;
+    }
+
+    button[data-baseweb="tab"]:hover {
+        background-color: #F1F5F9 !important;
+    }
+
+    button[data-baseweb="tab"]:hover p,
+    button[data-baseweb="tab"]:hover span {
+        color: #0078D4 !important;
+    }
+
+    button[data-baseweb="tab"][aria-selected="true"] {
+        background-color: #FFFFFF !important;
+        border: 1px solid #CBD5E1 !important;
+        border-bottom: 2px solid #0078D4 !important;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.04) !important;
+    }
+
+    button[data-baseweb="tab"][aria-selected="true"] p,
+    button[data-baseweb="tab"][aria-selected="true"] span {
+        color: #0078D4 !important;
+        font-weight: 700 !important;
+    }
+
+    /* Force Light Background for All Input Controls */
+    div[data-baseweb="select"] > div,
+    div[data-baseweb="input"] > div,
+    div[data-baseweb="base-input"],
+    .stDateInput input,
+    .stTextInput input {
+        background-color: #FFFFFF !important;
+        color: #0F172A !important;
+        border: 1px solid #CBD5E1 !important;
+        border-radius: 6px !important;
+    }
+
+    span[data-baseweb="tag"] {
+        background-color: #EFF6FF !important;
+        color: #1D4ED8 !important;
+        border: 1px solid #BFDBFE !important;
+        border-radius: 4px !important;
+        font-weight: 600 !important;
+    }
+
+    span[data-baseweb="tag"] span {
+        color: #1D4ED8 !important;
+    }
+
     .main-header {
         font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
         font-size: 26px;
@@ -52,7 +150,7 @@ st.markdown("""
     .sub-header {
         font-size: 13px;
         color: #64748B;
-        margin-bottom: 20px;
+        margin-bottom: 12px;
         letter-spacing: 0.3px;
     }
     .metric-badge {
@@ -95,7 +193,11 @@ st.markdown("""
 
 # Application Header
 st.markdown("<div class='main-header'>Market Demand Forecasting Engine</div>", unsafe_allow_html=True)
-st.markdown("<div class='sub-header'>Real historical retail data • Local storage simulations • MapReduce-style analytics • Stream Mining • Product Clustering • Demand Forecasting</div>", unsafe_allow_html=True)
+st.markdown("<div class='sub-header'></div>", unsafe_allow_html=True)
+
+# Force Light Theme
+is_dark = False
+inject_theme_css(is_dark=False)
 
 # Initialize Storage Adapters
 hdfs = HDFSAdapter(DATA_DIR)
@@ -113,127 +215,37 @@ except (RuntimeError, ValueError) as error:
 with st.sidebar:
     st.markdown("### Dataset")
     st.markdown(f"""
-    **Source:** [UCI Online Retail]({ONLINE_RETAIL_PAGE})<br>
-    **Period:** {dataset_metadata['start_date']} to {dataset_metadata['end_date']}<br>
-    **Currency:** GBP (£)<br>
-    **Storage:** Local CSV files (HDFS simulation)
+    **Source:** [UCI Online Retail]({ONLINE_RETAIL_PAGE})
+    
+    
     """)
 
     st.markdown("---")
-    st.markdown("### Dataset Ingestion")
-    st.caption(
-        f"{dataset_metadata['cleaned_sales_rows']:,} valid sales lines from "
-        f"{dataset_metadata['source_rows']:,} source rows. Cancellations and invalid "
-        "or non-positive sales are excluded."
-    )
-    if st.button("Reload dataset from UCI"):
-        try:
-            with st.spinner("Downloading and preparing the official UCI dataset..."):
-                load_online_retail_dataset(force_download=True)
-            st.success("Dataset refreshed from UCI.")
-            st.rerun()
-        except (RuntimeError, ValueError) as error:
-            st.error(f"Dataset refresh failed. {error}")
 
-    st.markdown("---")
     st.metric(label="Products", value=f"{len(df_products):,}")
     st.metric(label="Clean sales lines", value=f"{len(df_transactions):,}")
     st.metric(label="Recorded sales", value=f"£{df_transactions['total_revenue'].sum():,.2f}")
 
 # Main Navigation Tabs
 tab_dashboard, tab_hdfs, tab_mr, tab_stream, tab_cluster, tab_forecast, tab_pipeline = st.tabs([
-    "[0] Decision Dashboard",
-    "[1] Storage Concepts (Simulation)",
-    "[2] MapReduce Execution",
-    "[3] Stream Mining Engine",
-    "[4] Similarity & Clustering",
-    "[5] Demand Forecasting",
-    "[6] End-to-End Pipeline"
+    "Decision Dashboard",
+    "Storage Concepts (Simulation)",
+    "MapReduce Execution",
+    "Stream Mining Engine",
+    "Similarity & Clustering",
+    "Demand Forecasting",
+    "End-to-End Pipeline"
 ])
 
 # ===============================================================================
-# TAB 0: Decision Dashboard
+# TAB 0: Decision Dashboard (Tableau & Power BI Executive Experience)
 # ===============================================================================
 with tab_dashboard:
-    st.markdown("#### Sales & Demand Overview")
-    st.caption(
-        f"Historical UCI retail sales from {dataset_metadata['start_date']} to "
-        f"{dataset_metadata['end_date']} (GBP). Use this view to prioritize products "
-        "and markets for investigation; it is not a live or current-period forecast."
-    )
-
-    total_revenue = df_transactions["total_revenue"].sum()
-    total_orders = df_transactions["tx_id"].nunique()
-    identified_customers = df_transactions["customer_id"].nunique()
-    average_order_value = total_revenue / max(total_orders, 1)
-    kpi_revenue, kpi_orders, kpi_customers, kpi_aov = st.columns(4)
-    kpi_revenue.metric("Recorded revenue", f"£{total_revenue:,.0f}")
-    kpi_orders.metric("Invoices", f"{total_orders:,}")
-    kpi_customers.metric("Identified customers", f"{identified_customers:,}")
-    kpi_aov.metric("Average invoice value", f"£{average_order_value:,.2f}")
-
-    dashboard_sales = df_transactions.copy()
-    dashboard_sales["date"] = pd.to_datetime(dashboard_sales["date"], errors="coerce")
-    dashboard_sales["month"] = dashboard_sales["date"].dt.to_period("M").astype(str)
-    monthly_revenue = (
-        dashboard_sales.groupby("month")["total_revenue"]
-        .sum().rename("Revenue (£)").to_frame()
-    )
-    monthly_units = (
-        dashboard_sales.groupby("month")["quantity"]
-        .sum().rename("Units sold").to_frame()
-    )
-
-    product_summary = (
-        dashboard_sales.groupby("product_id", as_index=False)
-        .agg(units_sold=("quantity", "sum"), revenue=("total_revenue", "sum"))
-        .merge(df_products[["product_id", "name"]], on="product_id", how="left")
-    )
-    product_summary["label"] = (
-        product_summary["product_id"].astype(str) + " — "
-        + product_summary["name"].fillna("Unknown product")
-    )
-    country_summary = (
-        dashboard_sales.groupby("country")["total_revenue"]
-        .sum().sort_values(ascending=False).head(10)
-        .rename("Revenue (£)").to_frame()
-    )
-
-    trend_col, country_col = st.columns([1.6, 1])
-    with trend_col:
-        st.markdown("##### Monthly revenue and units")
-        st.caption("Revenue shows market activity; units help distinguish price mix from volume.")
-        st.line_chart(monthly_revenue)
-        st.bar_chart(monthly_units)
-    with country_col:
-        st.markdown("##### Top markets by revenue")
-        st.caption("Top 10 countries by recorded sales value.")
-        st.bar_chart(country_summary)
-        if len(country_summary) > 0:
-            country_share = country_summary.iloc[0, 0] / max(total_revenue, 1) * 100
-            st.info(
-                f"{country_summary.index[0]} accounts for {country_share:.1f}% of "
-                "recorded revenue. Consider this concentration when reviewing market exposure."
-            )
-
-    st.markdown("##### Product priorities")
-    st.caption("Revenue leaders can inform commercial focus; unit leaders can inform historical demand planning.")
-    leaders_col, volume_col = st.columns(2)
-    with leaders_col:
-        st.markdown("**Top products by revenue**")
-        revenue_leaders = product_summary.nlargest(10, "revenue").set_index("label")[["revenue"]]
-        revenue_leaders.columns = ["Revenue (£)"]
-        st.bar_chart(revenue_leaders)
-    with volume_col:
-        st.markdown("**Top products by units sold**")
-        volume_leaders = product_summary.nlargest(10, "units_sold").set_index("label")[["units_sold"]]
-        volume_leaders.columns = ["Units sold"]
-        st.bar_chart(volume_leaders)
-
-    st.caption(
-        "Decision limits: the source covers one historical year, has no inventory, "
-        "cost, margin, or stockout data, and may not reflect current demand. Validate "
-        "any replenishment or market decision against current business data."
+    render_decision_dashboard(
+        df_transactions=df_transactions,
+        df_products=df_products,
+        dataset_metadata=dataset_metadata,
+        is_dark=is_dark
     )
 
 # ==============================================================================
@@ -501,85 +513,5 @@ with tab_forecast:
 # TAB 6: End-to-End PySpark + HDFS Pipeline
 # ===============================================================================
 with tab_pipeline:
-    st.markdown("#### UCI Retail Pipeline Results")
     pipeline_dir = Path(__file__).resolve().parent / "pipeline_outputs"
-    summary_file = pipeline_dir / "pipeline_summary.json"
-    forecasts_file = pipeline_dir / "product_forecasts.csv"
-    segment_file = pipeline_dir / "validation_demand_segments.csv"
-    product_validation_file = pipeline_dir / "validation_top_products.csv"
-
-    if summary_file.exists() and forecasts_file.exists():
-        summary = json.loads(summary_file.read_text(encoding="utf-8"))
-        pipeline_forecasts = pd.read_csv(forecasts_file)
-        evaluation = summary["evaluation"]
-
-        st.caption(
-            f"PySpark validated and transformed {summary['clean_rows_after_spark']:,} sales lines. "
-            f"The 30-day holdout covers {summary['validation_start']} to {summary['validation_end']}."
-        )
-        metric_cols = st.columns(3)
-        metric_cols[0].metric("ML model MAE", f"{evaluation['ml_mae']:.2f} units")
-        metric_cols[1].metric("Recent 7-day average MAE", f"{evaluation['baseline_mae']:.2f} units")
-        metric_cols[2].metric("Same weekday, 4-week average MAE", f"{evaluation['four_week_weekday_mae']:.2f} units")
-        rmse_cols = st.columns(3)
-        rmse_cols[0].metric("ML model RMSE", f"{evaluation['ml_rmse']:.2f} units")
-        rmse_cols[1].metric("Recent 7-day average RMSE", f"{evaluation['baseline_rmse']:.2f} units")
-        rmse_cols[2].metric("Same weekday, 4-week average RMSE", f"{evaluation['four_week_weekday_rmse']:.2f} units")
-        st.caption(
-            "Lower is better. Each score covers all product-days in the held-out month, including days with no sales. "
-            "The demand-segment and product tables below expose where errors are concentrated."
-        )
-
-        if segment_file.exists():
-            st.markdown("##### Validation errors by actual daily demand")
-            st.caption("This separates the many zero/low-sales days from high-volume days.")
-            st.dataframe(pd.read_csv(segment_file), use_container_width=True, hide_index=True)
-        if product_validation_file.exists():
-            st.markdown("##### Validation results for the 20 highest-volume products")
-            st.caption("Totals cover the held-out month; MAE is the average daily error for that product.")
-            st.dataframe(pd.read_csv(product_validation_file), use_container_width=True, hide_index=True)
-
-        st.markdown("##### Highest projected product demand")
-        st.caption(
-            "The model's 7-day projection holds its next-day estimate flat; the simple comparator extends the recent 7-day average. "
-            "The reorder point is only a demand buffer proxy; stock and supplier data are unavailable."
-        )
-        leaders = pipeline_forecasts.nlargest(15, "forecast_next_7d_units")
-        chart_data = leaders[["product_id", "forecast_next_7d_units", "baseline_next_7d_units"]].melt(
-            id_vars="product_id", var_name="forecast_type", value_name="projected_units"
-        )
-        chart_data["forecast_type"] = chart_data["forecast_type"].map({
-            "forecast_next_7d_units": "ML model",
-            "baseline_next_7d_units": "Recent 7-day average",
-        })
-        comparison_chart = alt.Chart(chart_data).mark_bar().encode(
-            x=alt.X("product_id:N", title="Product ID", axis=alt.Axis(labelAngle=-45)),
-            xOffset=alt.XOffset("forecast_type:N"),
-            y=alt.Y("projected_units:Q", title="Projected units over 7 days"),
-            color=alt.Color("forecast_type:N", title="Forecast method"),
-            tooltip=["product_id:N", "forecast_type:N", "projected_units:Q"],
-        ).properties(height=360)
-        st.altair_chart(comparison_chart, use_container_width=True)
-        st.dataframe(
-            leaders[[
-                "product_id", "product_name", "forecast_next_day_units",
-                "forecast_next_7d_units", "baseline_next_7d_units",
-                "demand_buffer_units", "reorder_point_proxy_units",
-            ]],
-            use_container_width=True,
-        )
-        with st.expander("Pipeline stages and HDFS output paths"):
-            st.write("**HDFS root:**", summary["hdfs_root"])
-            st.json(summary["outputs"])
-            st.caption(
-                "The Docker cluster runs a real NameNode and two DataNode processes with "
-                "replication factor 2. They share one computer, so this is not multi-machine "
-                "fault tolerance."
-            )
-        st.warning(summary["inventory_note"])
-    else:
-        st.info(
-            "Pipeline output is not present yet. Start the full local stack from the project "
-            "folder with `docker compose up --build`. The first run downloads the free Hadoop "
-            "image layers and UCI source dataset, runs PySpark, and writes Parquet to HDFS."
-        )
+    render_pipeline_dashboard(pipeline_dir=pipeline_dir, is_dark=is_dark)
