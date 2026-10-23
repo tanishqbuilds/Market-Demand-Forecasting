@@ -1,64 +1,41 @@
-# Market Demand Forecasting System
+# Market Demand Forecasting Workbench
 
-A clean, enterprise-grade educational project for undergraduate **Big Data Analytics (BDA)** courses. Demonstrates core distributed data storage, parallel processing, sub-linear streaming algorithms, high-dimensional clustering, and time-series demand forecasting with **zero frontend code** using Streamlit.
+An educational Big Data Analytics dashboard built with Python and Streamlit. It uses real historical retail sales from the UCI Machine Learning Repository to demonstrate data preparation, aggregation, stream algorithms, product similarity, clustering, and simple demand forecasting.
 
-## Quick Start (1 Command)
+## Run locally
 
-```bash
-cd market-demand-forecasting
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 streamlit run app.py
 ```
-Open [http://localhost:8501](http://localhost:8501) in your browser.
 
----
+On first launch, the app downloads the UCI dataset, cleans it, and stores normalized CSV files under `hdfs_sim/`. This requires an internet connection. Later launches use the local cached CSVs; use **Reload dataset from UCI** in the sidebar to download and prepare the source again. Open the URL printed by Streamlit, usually <http://localhost:8501>.
 
-## Big Data Analytics (BDA) Concept Mapping
+## Data source and preparation
 
-### 1. Storage & Distributed Topology (`storage_and_data.py`)
-- **HDFS Lake Simulation (`hdfs_sim/`)**:
-  - **NameNode**: Maintains in-memory metadata (`fsimage`) mapping file paths to Block IDs.
-  - **DataNode**: Stores physical data chunks partitioned into standard **128 MB logical blocks**.
-  - **Rack Awareness Policy**: Enforces standard 3x replication (2 replicas on local Rack 1, 1 replica on remote Rack 2 across the core switch for cross-rack fault isolation).
-- **NoSQL Serving Tier (`nosql_sim.json`)**: Document store for low-latency queries and cached analytical forecasts.
+The app uses the [UCI Online Retail dataset](https://archive.ics.uci.edu/dataset/352/online+retail), containing transactions from a UK-based online retailer between December 2010 and December 2011. It records invoices, product codes and descriptions, quantities, timestamps, unit prices, customer IDs, and countries. Prices are in British pounds (GBP).
 
-### 2. Distributed MapReduce Execution Engine (`bigdata_algorithms.py`)
-- **Stage 1 (Input Split & Map)**: Mappers parse raw CSV blocks and emit intermediate key-value pairs:
-  $$\text{Map}: (K_1, V_1) \to \text{list}(K_2, V_2) = (product\_id, (quantity, revenue))$$
-- **Stage 2 (Partitioning & Shuffle/Sort)**: Hash partitioner ($\text{hash}(key) \pmod{\text{NumReducers}}$) collates keys across worker nodes.
-- **Stage 3 (Reduce)**: Aggregates total demand and revenue per SKU.
-- **Reduce-Side Join**: Tags heterogeneous datasets (`'P'` for catalog metadata and `'T'` for POS transactions) and joins them on the Reducer.
+The app excludes cancellation invoices, non-product stock codes, rows with missing required sales fields, invalid dates, and rows with non-positive quantities or prices. It does not fabricate product categories or costs, which are not present in the source. Catalog prices are observed median unit prices; product tags are words taken from the source descriptions. Some customer IDs are missing in the original data.
 
-### 3. Mining Data Streams
-- **Bloom Filter (Membership Testing)**:
-  - Sub-linear bit array ($m$ bits) with $k$ independent hash functions.
-  - Guarantees **zero false negatives** with theoretical false positive bound:
-    $$p \approx \left(1 - e^{-kn/m}\right)^k$$
-- **DGIM Algorithm (Sliding Window Model)**:
-  - Tracks surge purchases in a sliding window of size $N$ using only $O(\log^2 N)$ bits instead of $O(N)$.
-  - Maintains at most 2 buckets of any power-of-2 size ($2^j$), guaranteeing maximum error $\le 50\%$.
-- **Flajolet-Martin Algorithm (Distinct Element Counting)**:
-  - Estimates unique customers/stores in unbounded streams using maximum trailing zeros $R$ of 256-bit hashes:
-    $$\text{Distinct Estimate} = \frac{2^R}{\phi}, \quad \phi \approx 0.77351$$
+The source workbook is read from the official UCI archive and is not committed to the repository. The cleaned local cache and JSON results store are ignored by Git.
 
-### 4. High-Dimensional Similarity & CURE Clustering
-- **Jaccard Tag Similarity**:
-  $$J(A, B) = \frac{|A \cap B|}{|A \cup B|}$$
-- **CURE Clustering (Clustering Using Representatives)**:
-  - Overcomes standard K-Means spherical centroid limitations by picking multiple well-scattered points per cluster and shrinking them toward the centroid by factor $\alpha = 0.2$.
+## What the dashboard demonstrates
 
-### 5. Time-Series Demand Forecasting
-- Evaluates 7-day rolling moving averages and Ordinary Least Squares (OLS) linear trend projections.
-- Reports Mean Absolute Error (MAE) and caches model outputs in the NoSQL serving tier.
+- **Storage:** local CSV and JSON files demonstrate storage concepts. The HDFS block metadata, NameNode, replicas, and rack layout are visual simulations, not a Hadoop cluster.
+- **MapReduce-style aggregation and join:** product sales are grouped and joined in one Python process. This illustrates Map, partitioning, and Reduce; it does not distribute work across machines.
+- **Stream mining:** Bloom filter, DGIM, and Flajolet–Martin examples operate on bounded samples from the real dataset, not a live event feed.
+- **Product analysis:** Jaccard similarity compares words in product descriptions for the 30 best-selling products. K-Means groups products using scaled median price and total quantity sold. The representative-point display is illustrative; this is not a CURE implementation.
+- **Forecasting:** a moving average and linear trend are shown for a selected product. MAE is measured on the final held-out historical days before the trend is fit to all history for the example projection.
 
----
+## Limitations
 
-## File Structure
+This is a classroom demonstration, not a production inventory or forecasting service. The source data is historical and should not be used as a current sales forecast. The simulated storage, processing, and streaming components are local; there is no distributed cluster, real NoSQL server, or live sales connection. The simple forecast is not benchmarked against robust forecasting models or business costs.
 
-```
-market-demand-forecasting/
-├── storage_and_data.py      # HDFS lake & NoSQL storage adapters + synthetic POS ingestion
-├── bigdata_algorithms.py    # MapReduce, Stream Mining, CURE/K-Means, and Forecasting
-├── app.py                   # Clean enterprise data engineering dashboard
-├── requirements.txt         # streamlit, pandas, numpy, scikit-learn
-└── README.md
-```
+## Project files
+
+- `app.py` — Streamlit dashboard
+- `storage_and_data.py` — UCI download, cleaning, local storage adapters
+- `bigdata_algorithms.py` — analytics demonstrations
+- `requirements.txt` — Python dependencies, including the Excel reader used for the source workbook

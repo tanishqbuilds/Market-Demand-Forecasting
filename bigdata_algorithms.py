@@ -11,7 +11,7 @@ Core Big Data Analytics Algorithms for Undergraduates:
    - Flajolet-Martin Algorithm (Distinct item estimation via trailing hash zeros)
 3. High-Dimensional Similarity & Clustering:
    - Jaccard Similarity on Set Characteristics
-   - CURE & K-Means Market Segmentation (Price vs Demand)
+   - K-Means product segmentation (Price vs Demand)
 4. Distributed Demand Forecasting:
    - Moving Average, Linear Trend Projection, and MAE Metric
 """
@@ -22,62 +22,66 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
 
 # ==============================================================================
 # 1. MapReduce Execution Engine
 # ==============================================================================
 def mapreduce_product_demand_trace(df_transactions: pd.DataFrame, num_reducers: int = 3):
     """
-    Simulates the full Hadoop MapReduce execution pipeline:
+    Demonstrates a local, non-distributed MapReduce-style pipeline:
     1. Input Splits
     2. Map Phase: emits key-value pairs (K2, V2)
     3. Partitioner: hash(key) mod num_reducers
     4. Shuffle & Sort: network exchange and key collation
     5. Reduce Phase: aggregation per key
     """
-    # Stage 1: Input Splits
+    if num_reducers < 1:
+        raise ValueError("num_reducers must be at least 1.")
+
+    # These are illustrative local splits, not work dispatched to cluster workers.
+    base_rows, extra_rows = divmod(len(df_transactions), 3)
     sample_splits = [
-        {"split_id": f"Split-0{i+1}", "rows": len(df_transactions) // 3} for i in range(3)
+        {"split_id": f"Split-0{i+1}", "rows": base_rows + (i < extra_rows)}
+        for i in range(3)
     ]
 
-    # Stage 2: Map Phase
-    map_emissions = []
-    for _, row in df_transactions.iterrows():
-        key = str(row["product_id"])
-        val = {
-            "tx_id": str(row["tx_id"]),
-            "quantity": int(row["quantity"]),
-            "revenue": float(row["total_revenue"])
-        }
-        partition = abs(hash(key)) % num_reducers
-        map_emissions.append({"key": key, "value": val, "partition": partition})
+    def reducer_for(product_id):
+        digest = hashlib.sha256(str(product_id).encode()).digest()
+        return int.from_bytes(digest[:8], "big") % num_reducers
 
-    # Stage 3 & 4: Shuffle & Sort across Reducers
-    shuffle_sort = defaultdict(list)
-    for emission in map_emissions:
-        shuffle_sort[emission["key"]].append((emission["value"]["quantity"], emission["value"]["revenue"]))
-
-    # Stage 5: Reduce Phase
-    reduce_results = []
-    for product_id, val_list in shuffle_sort.items():
-        total_qty = sum(v[0] for v in val_list)
-        total_rev = sum(v[1] for v in val_list)
-        tx_count = len(val_list)
-        assigned_reducer = abs(hash(product_id)) % num_reducers
-        reduce_results.append({
-            "product_id": product_id,
-            "units_sold": total_qty,
-            "total_revenue": round(total_rev, 2),
-            "order_count": tx_count,
-            "assigned_reducer": f"Reducer-{assigned_reducer}"
+    sample_emissions = []
+    for row in df_transactions.head(12).itertuples(index=False):
+        key = str(row.product_id)
+        sample_emissions.append({
+            "key": key,
+            "value": {
+                "tx_id": str(row.tx_id),
+                "quantity": int(row.quantity),
+                "revenue": float(row.total_revenue),
+            },
+            "partition": reducer_for(key),
         })
 
-    df_reduced = pd.DataFrame(reduce_results).sort_values(by="units_sold", ascending=False)
+    # Vectorized aggregation keeps the real, large dataset responsive.
+    df_reduced = (
+        df_transactions.groupby("product_id", as_index=False)
+        .agg(
+            units_sold=("quantity", "sum"),
+            total_revenue=("total_revenue", "sum"),
+            sales_line_count=("tx_id", "size"),
+        )
+    )
+    df_reduced["total_revenue"] = df_reduced["total_revenue"].round(2)
+    df_reduced["assigned_reducer"] = df_reduced["product_id"].map(
+        lambda product_id: f"Reducer-{reducer_for(product_id)}"
+    )
+    df_reduced = df_reduced.sort_values(by="units_sold", ascending=False)
 
     return {
         "splits": sample_splits,
-        "sample_map_emissions": map_emissions[:12],
-        "total_emissions_count": len(map_emissions),
+        "sample_map_emissions": sample_emissions,
+        "total_emissions_count": len(df_transactions),
         "reduced_df": df_reduced
     }
 
@@ -93,7 +97,7 @@ def mapreduce_reduce_side_join_trace(df_transactions: pd.DataFrame, df_products:
         tagged_records.append({
             "key": p["product_id"],
             "tag": "P (Catalog)",
-            "payload": {"name": p["name"], "category": p["category"], "price": p["price"]}
+            "payload": {"name": p["name"], "price": p["price"]}
         })
     for _, t in df_transactions.head(20).iterrows():
         tagged_records.append({
@@ -117,7 +121,7 @@ def mapreduce_reduce_side_join_trace(df_transactions: pd.DataFrame, df_products:
                     "tx_id": data["tx_id"],
                     "product_id": prod_id,
                     "product_name": prod_info["name"],
-                    "category": prod_info["category"],
+                    "unit_price": prod_info["price"],
                     "quantity": data["quantity"],
                     "revenue": data["revenue"]
                 })
@@ -245,12 +249,19 @@ def flajolet_martin_trace(stream_items: list):
 # ==============================================================================
 # 3. High-Dimensional Similarity & Clustering
 # ==============================================================================
-def compute_jaccard_matrix(df_products: pd.DataFrame):
+def compute_jaccard_matrix(df_products: pd.DataFrame, top_n: int = 30):
     """
     Jaccard Similarity J(A, B) = |A ∩ B| / |A ∪ B|.
     Measures overlap of product characteristic tag sets.
     """
-    records = df_products.to_dict(orient="records")
+    if top_n < 1:
+        raise ValueError("top_n must be at least 1.")
+    products = df_products
+    if "units_sold" in products.columns:
+        products = products.nlargest(top_n, "units_sold")
+    else:
+        products = products.head(top_n)
+    records = products.to_dict(orient="records")
     data = []
     for p1 in records:
         set1 = set(p1["tags"].split())
@@ -264,20 +275,25 @@ def compute_jaccard_matrix(df_products: pd.DataFrame):
         data.append(row)
     return pd.DataFrame(data)
 
-def cluster_products_cure_concept(df_products: pd.DataFrame, df_transactions: pd.DataFrame, n_clusters: int = 3):
+def cluster_products_kmeans(df_products: pd.DataFrame, df_transactions: pd.DataFrame, n_clusters: int = 3):
     """
-    CURE (Clustering Using Representatives) vs K-Means concept:
-    - K-Means discovers spherical clusters around a single centroid.
-    - CURE identifies clusters using multiple representative points shrunk toward the centroid by factor alpha.
+    Groups products by scaled price and sales quantity using K-Means.
+    Representative points are included only as a visual illustration, not as CURE.
     """
     demand = df_transactions.groupby("product_id")["quantity"].sum().reset_index()
     merged = pd.merge(df_products, demand, on="product_id", how="left").fillna(0)
 
     X = merged[["price", "quantity"]].values
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-    merged["cluster_id"] = kmeans.fit_predict(X)
+    n_distinct = len(np.unique(X, axis=0))
+    effective_clusters = min(n_clusters, n_distinct)
+    if effective_clusters < 1:
+        raise ValueError("At least one product is required for clustering.")
+    scaler = StandardScaler()
+    scaled_X = scaler.fit_transform(X)
+    kmeans = KMeans(n_clusters=effective_clusters, random_state=42, n_init=10)
+    merged["cluster_id"] = kmeans.fit_predict(scaled_X)
 
-    centroids = kmeans.cluster_centers_
+    centroids = scaler.inverse_transform(kmeans.cluster_centers_)
 
     # Calculate representative points shrunk by alpha = 0.2 toward centroid
     alpha = 0.2
@@ -296,21 +312,16 @@ def cluster_products_cure_concept(df_products: pd.DataFrame, df_transactions: pd
                 "rep_point_demand": round(shrunk_pt[1], 2)
             })
 
-    cluster_names = {
-        0: "High Volume / Entry Price",
-        1: "Premium Niche / Low Volume",
-        2: "Mid-Market Everyday"
-    }
-    merged["segment_label"] = merged["cluster_id"].map(lambda c: cluster_names.get(c, f"Cluster {c}"))
+    merged["segment_label"] = merged["cluster_id"].map(lambda c: f"Segment {c + 1}")
     return merged, pd.DataFrame(rep_points)
 
 # ==============================================================================
 # 4. Distributed Demand Forecasting
 # ==============================================================================
-def forecast_product_demand(df_transactions: pd.DataFrame, product_id: str = "P101", forecast_days: int = 7):
+def forecast_product_demand(df_transactions: pd.DataFrame, product_id: str, forecast_days: int = 7):
     """
     Evaluates 7-Day Rolling Moving Average and Linear Extrapolation.
-    Computes MAE (Mean Absolute Error) on historical observations.
+    Measures MAE on a held-out tail of historical observations.
     """
     prod_tx = df_transactions[df_transactions["product_id"] == product_id].copy()
     if prod_tx.empty:
@@ -320,16 +331,32 @@ def forecast_product_demand(df_transactions: pd.DataFrame, product_id: str = "P1
     daily["date"] = pd.to_datetime(daily["date"])
     daily = daily.sort_values(by="date").reset_index(drop=True)
 
-    # 7-day Moving Average
+    # Include zero-sales days so the time series has a consistent daily interval.
+    date_range = pd.date_range(daily["date"].min(), daily["date"].max(), freq="D")
+    daily = (
+        daily.set_index("date")
+        .reindex(date_range, fill_value=0)
+        .rename_axis("date")
+        .reset_index()
+    )
     daily["moving_avg_7d"] = daily["quantity"].rolling(window=7, min_periods=1).mean().round(2)
 
-    # Linear Regression (Ordinary Least Squares)
-    x = np.arange(len(daily))
-    y = daily["quantity"].values
-    if len(x) > 1:
+    y = daily["quantity"].to_numpy(dtype=float)
+    x = np.arange(len(y), dtype=float)
+    if len(y) > 1:
+        validation_days = min(7, max(1, len(y) // 5))
+        split_at = len(y) - validation_days
+        if split_at >= 2:
+            validation_slope, validation_intercept = np.polyfit(
+                x[:split_at], y[:split_at], 1
+            )
+            validation_prediction = np.maximum(
+                0, validation_slope * x[split_at:] + validation_intercept
+            )
+            mae = float(np.mean(np.abs(y[split_at:] - validation_prediction)))
+        else:
+            mae = 0.0
         slope, intercept = np.polyfit(x, y, 1)
-        fitted_y = slope * x + intercept
-        mae = float(np.mean(np.abs(y - fitted_y)))
     else:
         slope, intercept = 0.0, float(y[0]) if len(y) > 0 else 0.0
         mae = 0.0
@@ -345,10 +372,11 @@ def forecast_product_demand(df_transactions: pd.DataFrame, product_id: str = "P1
     })
 
     metrics = {
-        "model": "OLS Linear Trend + 7D Rolling Window",
+        "model": "OLS Linear Trend + 7D Rolling Average",
         "trend_slope": round(float(slope), 4),
         "mean_absolute_error_mae": round(mae, 2),
-        "historical_days_evaluated": len(daily)
+        "validation_days": min(7, max(1, len(daily) // 5)) if len(daily) > 1 else 0,
+        "historical_days_evaluated": len(daily),
     }
 
     return daily, df_forecast, metrics
